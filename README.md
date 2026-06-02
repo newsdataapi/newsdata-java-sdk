@@ -180,6 +180,68 @@ mvn -B test         # tests only
 
 The test suite uses Java's built-in `com.sun.net.httpserver.HttpServer` as a local mock — no WireMock, no network, no external test dep.
 
+## Releasing to Maven Central
+
+Releases are automated via `.github/workflows/publish.yml` — push a `v`-prefixed tag whose number matches `pom.xml`'s `<version>` and the workflow signs, uploads, and publishes.
+
+```bash
+# bump <version> in pom.xml first
+git commit -am "Bump to 0.0.2"
+git tag -a v0.0.2 -m "v0.0.2"
+git push origin main v0.0.2          # tag push fires publish.yml
+```
+
+### One-time setup before the first release
+
+Maven Central is the heaviest of the registries to wire up — it predates OIDC trusted publishing and requires GPG-signed artifacts. The good news: you do this once.
+
+#### 1. Register the `io.newsdata` namespace
+
+- Sign up at <https://central.sonatype.com/>.
+- Account → **Add Namespace** → enter `io.newsdata`.
+- Verify by adding the displayed TXT record to `newsdata.io`'s DNS. Propagation typically takes minutes; longer for stubborn DNS providers.
+
+#### 2. Create a user token (for the publish workflow)
+
+On <https://central.sonatype.com/account> → **Generate User Token** → copy the **token name** and **token password** (you can't see them again).
+
+#### 3. Generate a GPG key
+
+```bash
+gpg --gen-key                                            # interactive; default RSA 3072 is fine
+gpg --list-secret-keys --keyid-format LONG               # note the key ID (after sec   rsa3072/)
+gpg --keyserver keys.openpgp.org --send-keys <KEY_ID>    # upload public key
+gpg --export-secret-keys --armor <KEY_ID> > private.key  # this file goes into GitHub
+```
+
+#### 4. Store secrets on GitHub
+
+Repo Settings → **Secrets and variables** → **Actions** → **New repository secret**:
+
+| Secret name | Value |
+|---|---|
+| `MAVEN_USERNAME` | the user-token *name* from step 2 |
+| `MAVEN_PASSWORD` | the user-token *password* from step 2 |
+| `GPG_PRIVATE_KEY` | the full contents of `private.key` from step 3 (including `-----BEGIN PGP PRIVATE KEY BLOCK-----` lines) |
+| `GPG_PASSPHRASE` | the passphrase you set in step 3 |
+
+Then delete `private.key` from your machine.
+
+#### 5. First publish
+
+Push a tag (`git push origin v0.0.2`). The workflow:
+
+1. Verifies the tag matches `<version>` in `pom.xml`.
+2. Runs `mvn verify` (all tests).
+3. Runs `mvn -Prelease deploy` — signs every artifact (jar, sources, javadoc, pom) with your GPG key and uploads via the `central-publishing-maven-plugin`.
+4. With `autoPublish=true` set in the release profile, the deployment is released directly. (For a manual approval gate, set `autoPublish=false` and approve on <https://central.sonatype.com/publishing>.)
+
+Artifacts appear on Maven Central indexes within ~10–30 minutes after a successful workflow run, then in the public search within 1–4 hours.
+
+### Why no OIDC trusted publishing (yet)?
+
+Unlike npm, PyPI, and pub.dev, the Sonatype Central Portal doesn't yet support tokenless GitHub Actions publishing via OIDC — it's on their roadmap. Until then, the user-token + GPG-signing flow above is the supported path.
+
 ## License
 
 [MIT](./LICENSE)

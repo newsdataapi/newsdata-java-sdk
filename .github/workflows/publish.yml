@@ -1,0 +1,65 @@
+name: Publish to Maven Central
+
+# Publishes to Maven Central (Sonatype Central Portal) when a v-prefixed tag
+# is pushed (e.g. v0.0.2). Optionally trigger manually from the Actions tab.
+#
+# Required GitHub secrets (one-time setup):
+#   MAVEN_USERNAME   - user token name from https://central.sonatype.com/account
+#   MAVEN_PASSWORD   - user token password from the same page
+#   GPG_PRIVATE_KEY  - ASCII-armored private key:
+#                        gpg --export-secret-keys --armor <KEY_ID>
+#   GPG_PASSPHRASE   - passphrase for the GPG key
+#
+# Maven Central does not yet support OIDC trusted publishing, so credentials
+# are stored as secrets. (Sonatype has trusted publishing on the roadmap.)
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to Maven Central
+    runs-on: ubuntu-latest
+    environment:
+      name: maven-central
+      url: https://central.sonatype.com/artifact/io.newsdata/newsdataapi
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17 + Maven settings + GPG
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          # Writes ~/.m2/settings.xml so deploys to <server id="central">
+          # pick up the credentials from env vars.
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+
+      - name: Verify tag matches pom version
+        run: |
+          POM_VERSION="$(mvn -B -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$POM_VERSION" != "$TAG" ]; then
+            echo "::error::Release tag '${GITHUB_REF_NAME}' (version '$TAG') does not match pom.xml version '$POM_VERSION'"
+            exit 1
+          fi
+          echo "Publishing newsdataapi $POM_VERSION"
+
+      - name: Build & test
+        run: mvn -B -ntp verify
+
+      - name: Deploy to Maven Central
+        run: mvn -B -ntp -Prelease deploy
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}

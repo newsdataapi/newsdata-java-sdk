@@ -105,11 +105,62 @@
         </plugins>
     </build>
 
-    <!--
-        Publishing to Maven Central (Sonatype Central Portal):
-        - One-time: register the io.newsdata namespace at https://central.sonatype.com/
-        - Add a `release` profile here (or use central-publishing-maven-plugin) with
-          GPG signing and central-publishing config. Kept out of the base build to
-          keep `mvn package` fast and dependency-free.
-    -->
+    <profiles>
+        <!--
+            `release` profile: GPG-sign all artifacts and deploy to the Sonatype
+            Central Portal (Maven Central). Activated by `mvn -Prelease deploy`,
+            or implicitly by the publish.yml workflow.
+
+            One-time setup before this works:
+              1. Register the `io.newsdata` namespace at https://central.sonatype.com/
+                 and verify domain ownership of newsdata.io via DNS TXT.
+              2. Generate a GPG key pair, upload the public key to
+                 `keys.openpgp.org`, and store the private key as the GitHub
+                 secret `GPG_PRIVATE_KEY` (+ `GPG_PASSPHRASE`).
+              3. Create a user token on https://central.sonatype.com/account
+                 and store it as secrets `MAVEN_USERNAME` / `MAVEN_PASSWORD`.
+
+            See README.md for the full walkthrough.
+        -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.4</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals><goal>sign</goal></goals>
+                                <configuration>
+                                    <!-- Don't prompt; passphrase from env / GPG agent. -->
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.6.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <!-- autoPublish=true: skip the manual approval step
+                                 on https://central.sonatype.com/ and release
+                                 directly. Set to false for dry-runs. -->
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
