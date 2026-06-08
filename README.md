@@ -8,6 +8,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/newsdataapi/newsdata-java-sdk/ci.yml?branch=main&logo=github&label=CI)](https://github.com/newsdataapi/newsdata-java-sdk/actions/workflows/ci.yml)
 [![Java](https://img.shields.io/badge/java-%3E%3D17-007396?logo=openjdk)](https://openjdk.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![OpenAPI](https://img.shields.io/badge/OpenAPI-3.1-85EA2D)](https://newsdata.io/openapi.json)
 
 </div>
 
