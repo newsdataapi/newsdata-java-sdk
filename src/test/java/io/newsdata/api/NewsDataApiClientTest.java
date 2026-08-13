@@ -2,6 +2,7 @@ package io.newsdata.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -241,6 +242,31 @@ class NewsDataApiClientTest {
         assertEquals(List.of("x", "y"), art.aiTag());
         assertEquals("positive", art.sentiment());
         assertEquals(1, art.sourcePriority());
+    }
+
+    // Market results carry both `symbol` and `market_id`; the two are separate
+    // response fields and both decode onto Article.
+    @Test
+    void articleDecodesSymbolAndMarketId() {
+        handle("market", exchange -> respond(exchange, 200,
+                successBody("[{\"article_id\":\"m1\",\"symbol\":[\"AAPL\",\"MSFT\"],"
+                        + "\"market_id\":[\"NASDAQ:AAPL\",\"NASDAQ:MSFT\"]}]")));
+        var client = defaultBuilder().build();
+        var resp = client.market(Params.of().with("market_id", "AAPL"));
+        var art = resp.articles(client.objectMapper()).get(0);
+        assertEquals(List.of("AAPL", "MSFT"), art.symbol());
+        assertEquals(List.of("NASDAQ:AAPL", "NASDAQ:MSFT"), art.marketId());
+    }
+
+    @Test
+    void articleSymbolAndMarketIdAreNullWhenAbsent() {
+        handle("latest", exchange -> respond(exchange, 200,
+                successBody("[{\"article_id\":\"a1\",\"title\":\"t\"}]")));
+        var client = defaultBuilder().build();
+        var art = client.latest(Params.of().with("q", "x"))
+                .articles(client.objectMapper()).get(0);
+        assertNull(art.symbol());
+        assertNull(art.marketId());
     }
 
     @Test

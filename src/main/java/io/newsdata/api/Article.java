@@ -41,5 +41,7 @@ public record Article(
         @JsonProperty("ai_org") List<String> aiOrg,
         @JsonProperty("sentiment") String sentiment,
         @JsonProperty("sentiment_stats") Map<String, Object> sentimentStats,
-        @JsonProperty("datatype") String dataType
+        @JsonProperty("datatype") String dataType,
+        @JsonProperty("symbol") List<String> symbol,
+        @JsonProperty("market_id") List<String> marketId
 ) {}
