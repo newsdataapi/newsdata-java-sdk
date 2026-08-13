@@ -28,18 +28,18 @@ dependency is Jackson for JSON. Thread-safe.
 <dependency>
     <groupId>io.newsdata</groupId>
     <artifactId>newsdataapi</artifactId>
-    <version>0.0.1</version>
+    <version>0.1.0</version>
 </dependency>
 ```
 
 ### Gradle (Kotlin DSL)
 ```kotlin
-implementation("io.newsdata:newsdataapi:0.0.1")
+implementation("io.newsdata:newsdataapi:0.1.0")
 ```
 
 ### Gradle (Groovy DSL)
 ```groovy
-implementation 'io.newsdata:newsdataapi:0.0.1'
+implementation 'io.newsdata:newsdataapi:0.1.0'
 ```
 
 ## Quickstart
