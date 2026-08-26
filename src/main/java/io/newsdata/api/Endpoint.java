@@ -23,7 +23,13 @@ public enum Endpoint {
     /** {@code /1/crypto/count} — aggregate crypto counts. */
     CRYPTO_COUNT("crypto_count"),
     /** {@code /1/market/count} — aggregate market counts. */
-    MARKET_COUNT("market_count");
+    MARKET_COUNT("market_count"),
+    /** {@code /1/websocket/register} — register a real-time query. */
+    WEBSOCKET_REGISTER("websocket_register"),
+    /** {@code /1/websocket/fetch} — list registered real-time queries. */
+    WEBSOCKET_FETCH("websocket_fetch"),
+    /** {@code /1/websocket/delete} — delete a registered real-time query. */
+    WEBSOCKET_DELETE("websocket_delete");
 
     private final String key;
 
