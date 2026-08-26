@@ -74,6 +74,9 @@ for (Article article : resp.articles(client.objectMapper())) {
 | `client.count(params)` | `/1/count` | Aggregate counts (requires `from_date`, `to_date`) |
 | `client.cryptoCount(params)` | `/1/crypto/count` | Aggregate crypto counts |
 | `client.marketCount(params)` | `/1/market/count` | Aggregate market counts |
+| `client.websocketRegister(params)` | `/1/websocket/register` | Register a real-time query |
+| `client.websocketFetch()` | `/1/websocket/fetch` | List registered queries |
+| `client.websocketDelete(id)` | `/1/websocket/delete` | Delete a registered query |
 
 `params` is a `Map<String, Object>`. Use the bundled [`Params`](src/main/java/io/newsdata/api/Params.java) helper for fluent construction — `null` values are dropped automatically so you can chain optional fields without `if`-guards. Values may be `String`, `Number`, `Boolean`, or `Collection<String>` (sent comma-joined). Parameter names are case-insensitive — `qInTitle` and `qintitle` are equivalent.
 
@@ -115,6 +118,81 @@ A `NewsdataValidationException` is thrown — before any HTTP request — when:
 
 Booleans for `full_content`, `image`, `video`, and `removeduplicate` are coerced to `"1"`/`"0"`.
 
+## Real-time news (WebSocket)
+
+Register a query first — the returned `registration_id` identifies it from then on:
+
+```java
+NewsdataResponse registered = client.websocketRegister(
+        Params.of().with("q", "bitcoin").with("language", "en"));
+String registrationId = registered.results().path("registration_id").asText();
+```
+
+`websocketRegister` takes the familiar filter names (`q`, `country`,
+`language`, `domain`, …) — no date or paging filters, since a registered query
+matches news as it is published. Registering an identical query twice throws
+`NewsdataApiException` with status 409; the existing id is in its response body.
+`websocketFetch()` lists every registered query and `websocketDelete(id)`
+removes one.
+
+Then stream. The handler returns `true` to keep streaming and `false` to stop:
+
+```java
+try (NewsDataApiWebSocket ws = new NewsDataApiWebSocket(client)) {
+    ws.stream(registrationId, response -> {
+        for (Article a : response.articles(client.objectMapper())) {
+            System.out.println(a.title() + " - " + a.link());
+        }
+        return true;
+    });
+}
+```
+
+`stream` blocks until the handler returns `false`, the instance is closed, or
+the calling thread is interrupted. Closing from another thread — including via
+try-with-resources — ends an in-flight stream.
+
+Transient drops (network errors, server restarts, abnormal closes) are
+reconnected automatically with a capped exponential backoff. Build with
+`.reconnect(false)` to stop on the first disconnect instead. A permanent
+rejection — bad API key or unknown
+`registration_id`, exhausted API credits, or too many simultaneous devices — throws
+`NewsdataWebSocketAuthException` and is **not** retried.
+
+The server always accepts the handshake and then closes with code **1008** when
+the connection is refused, carrying one of three reasons: `invalid credentials
+or registration not found`, `api limit reached`, or `device limit reached` (more
+than 5 devices on one `registration_id`). Every other close code — including
+`1013` (`send timeout`, meaning the client read too slowly) — is transient and
+reconnects.
+
+**Each delivered article consumes 1 API credit per connected device.**
+
+Catch it like any other client error:
+
+```java
+try {
+    ws.stream(registrationId, response -> true);
+} catch (NewsdataWebSocketAuthException e) {
+    System.err.println("rejected: " + e.getMessage());
+} catch (NewsdataWebSocketException e) {
+    System.err.println("stream error: " + e.getMessage());
+}
+```
+
+All connection options go through the builder:
+
+```java
+NewsDataApiWebSocket ws = NewsDataApiWebSocket.builder(client)
+        .baseUrl("wss://ws.newsdata.io/ws/event")   // staging / self-hosted / proxied
+        .reconnect(true)                            // default true
+        .reconnectDelay(Duration.ofSeconds(1))      // first delay; doubles each retry
+        .reconnectDelayMax(Duration.ofSeconds(30))  // cap on the delay
+        .handshakeTimeout(Duration.ofSeconds(10))   // opening handshake bound
+        .headers(Map.of("X-Trace", "abc"))          // extra handshake headers
+        .build();
+```
+
 ## Error handling
 
 All SDK exceptions extend `RuntimeException`, so they don't pollute method signatures with `throws` clauses. Catch by type to react to specific failures:
@@ -148,7 +226,9 @@ NewsdataException (extends RuntimeException)
 │   ├── NewsdataAuthException               (401 / 403)
 │   ├── NewsdataRateLimitException          (429; .retryAfter())
 │   └── NewsdataServerException             (5xx)
-└── NewsdataNetworkException                (.getCause())
+├── NewsdataNetworkException                (.getCause())
+└── NewsdataWebSocketException              (real-time stream)
+    └── NewsdataWebSocketAuthException      (policy-violation close 1008)
 ```
 
 ## Configuration

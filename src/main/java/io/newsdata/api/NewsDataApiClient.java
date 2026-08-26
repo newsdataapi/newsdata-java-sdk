@@ -141,6 +141,55 @@ public final class NewsDataApiClient {
         return request(Endpoint.MARKET_COUNT.key(), params);
     }
 
+    // ---- real-time query management --------------------------------------
+
+    /**
+     * Register a real-time WebSocket query. POST /1/websocket/register.
+     *
+     * <p>Takes the familiar filter names ({@code q}, {@code country},
+     * {@code language}, {@code domain}, …); no date or paging filters apply,
+     * since a registered query matches news as it is published. The new
+     * query's id is at {@code results.registration_id} — pass it to
+     * {@link NewsDataApiWebSocket#stream}.
+     *
+     * <p>Registering an identical query twice throws
+     * {@link io.newsdata.api.exception.NewsdataApiException} with status 409;
+     * the existing id is in its response body.
+     */
+    public NewsdataResponse websocketRegister(Map<String, Object> params) {
+        Map<String, Object> withType = new LinkedHashMap<>(
+                params == null ? Map.of() : params);
+        withType.put("news_type", Constants.WS_NEWS_TYPE);
+        return request(Endpoint.WEBSOCKET_REGISTER.key(), withType);
+    }
+
+    /**
+     * List the account's registered real-time queries. GET /1/websocket/fetch.
+     * One entry per query at {@code results.queries}.
+     */
+    public NewsdataResponse websocketFetch() {
+        return request(Endpoint.WEBSOCKET_FETCH.key(), Map.of());
+    }
+
+    /** Delete a registered real-time query. DELETE /1/websocket/delete. */
+    public NewsdataResponse websocketDelete(String registrationId) {
+        if (registrationId == null || registrationId.isEmpty()) {
+            throw new NewsdataValidationException(
+                    "registrationId must be a non-empty string", "registration_id");
+        }
+        return request(Endpoint.WEBSOCKET_DELETE.key(),
+                Map.of("registration_id", registrationId));
+    }
+
+    /** The API key, for the WebSocket handshake URL. */
+    String apiKey() { return apiKey; }
+
+    /** The HTTP client, reused for the WebSocket handshake. */
+    HttpClient httpClient() { return httpClient; }
+
+    /** Forward a log line from the WebSocket layer. */
+    void logFromWebSocket(String level, String message) { log(level, message); }
+
     // ---- pagination ------------------------------------------------------
 
     /**
@@ -249,17 +298,18 @@ public final class NewsDataApiClient {
         String path = Constants.ENDPOINT_PATHS.get(endpoint);
         String url = baseUrl + path + "?" + buildQuery(encoded);
         String logUrl = redactApiKey(url);
+        String method = Constants.ENDPOINT_METHODS.getOrDefault(endpoint, "GET");
 
         Exception last = null;
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
-            log("info", "GET " + logUrl + " (attempt " + attempt + "/" + maxRetries + ")");
+            log("info", method + " " + logUrl + " (attempt " + attempt + "/" + maxRetries + ")");
             HttpResponse<String> resp;
             try {
                 HttpRequest req = HttpRequest.newBuilder()
                         .uri(URI.create(url))
                         .timeout(timeout)
                         .header("Accept", "application/json")
-                        .GET()
+                        .method(method, HttpRequest.BodyPublishers.noBody())
                         .build();
                 resp = httpClient.send(req, BodyHandlers.ofString());
             } catch (IOException e) {
@@ -290,8 +340,10 @@ public final class NewsDataApiClient {
                         "non-JSON response from API (status " + status + ")", status, body);
             }
 
+            boolean hasResults = parsed != null
+                    && !parsed.path("results").isNull() && !parsed.path("results").isMissingNode();
             if (status == 200 && parsed != null && parsed.path("status").asText("").equals("success")
-                    && !parsed.path("results").isNull() && !parsed.path("results").isMissingNode()) {
+                    && (hasResults || Constants.RESULTS_OPTIONAL.contains(endpoint))) {
                 return new NewsdataResponse(
                         "success",
                         parsed.path("totalResults").asInt(0),
