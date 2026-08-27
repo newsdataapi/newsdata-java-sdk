@@ -52,6 +52,7 @@ jobs:
           gpg-passphrase: GPG_PASSPHRASE
 
       - name: Verify tag matches pom version
+        id: version
         run: |
           POM_VERSION="$(mvn -B -q -DforceStdout help:evaluate -Dexpression=project.version)"
           TAG="${GITHUB_REF_NAME#v}"
@@ -59,12 +60,32 @@ jobs:
             echo "::error::Release tag '${GITHUB_REF_NAME}' (version '$TAG') does not match pom.xml version '$POM_VERSION'"
             exit 1
           fi
+          echo "version=$POM_VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing newsdataapi $POM_VERSION"
+
+      # Maven Central coordinates are immutable: re-uploading a version that is
+      # already released always fails with "Component with package url ...
+      # already exists". Re-running this job (to inspect logs, or after an
+      # unrelated hiccup) would therefore go red on a release that shipped
+      # perfectly well. Detect that case and skip the deploy instead.
+      - name: Skip if this version is already on Maven Central
+        id: published
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          URL="https://repo1.maven.org/maven2/io/newsdata/newsdataapi/${VERSION}/newsdataapi-${VERSION}.pom"
+          CODE="$(curl -sS -o /dev/null -w '%{http_code}' "$URL")"
+          if [ "$CODE" = "200" ]; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::io.newsdata:newsdataapi:${VERSION} is already on Maven Central; skipping the deploy (coordinates are immutable). Bump the version to publish again."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build & test
         run: mvn -B -ntp verify
 
       - name: Deploy to Maven Central
+        if: steps.published.outputs.already != 'true'
         run: mvn -B -ntp -Prelease deploy
         env:
           MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
