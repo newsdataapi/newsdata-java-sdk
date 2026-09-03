@@ -269,6 +269,54 @@ class NewsDataApiClientTest {
         assertNull(art.marketId());
     }
 
+    // A 429 covers a burst limit, a rate limit, and exhausted API credits.
+    // Only the first two are worth retrying.
+    @Test
+    void quotaExhausted429IsNotRetried() {
+        // One context, driven by a mutable code so the loop can reuse it.
+        AtomicReference<String> code = new AtomicReference<>();
+        AtomicInteger calls = new AtomicInteger();
+        handle("latest", exchange -> {
+            calls.incrementAndGet();
+            respond(exchange, 429,
+                    "{\"status\":\"error\",\"results\":{\"message\":\"limit\",\"code\":\""
+                            + code.get() + "\"}}");
+        });
+        var client = defaultBuilder()
+                .retryBackoff(Duration.ofMillis(1))
+                .retryBackoffMax(Duration.ofMillis(1))
+                .build();
+
+        for (String c : List.of("ApiLimitExceeded", "ApiKeyLimitExceeded")) {
+            code.set(c);
+            calls.set(0);
+            assertThrows(NewsdataRateLimitException.class,
+                    () -> client.latest(Params.of().with("q", "x")));
+            assertEquals(1, calls.get(), c + " must not be retried");
+        }
+    }
+
+    @Test
+    void transient429StillRetries() {
+        AtomicInteger calls = new AtomicInteger();
+        handle("latest", exchange -> {
+            if (calls.incrementAndGet() == 1) {
+                respond(exchange, 429,
+                        "{\"status\":\"error\",\"results\":{\"message\":\"slow\",\"code\":\"RateLimitExceeded\"}}");
+                return;
+            }
+            respond(exchange, 200, successBody("[{\"article_id\":\"1\",\"title\":\"ok\"}]"));
+        });
+        var client = defaultBuilder()
+                .retryBackoff(Duration.ofMillis(1))
+                .retryBackoffMax(Duration.ofMillis(1))
+                .build();
+
+        var resp = client.latest(Params.of().with("q", "x"));
+        assertEquals("success", resp.status());
+        assertEquals(2, calls.get());
+    }
+
     @Test
     void countReturnsAggregateMap() {
         handle("count", exchange -> respond(exchange, 200,

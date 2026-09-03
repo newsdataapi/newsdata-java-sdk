@@ -85,6 +85,19 @@ public final class Constants {
     /** Bound on the opening handshake. */
     public static final Duration WS_HANDSHAKE_TIMEOUT = Duration.ofSeconds(10);
 
+    /**
+     * Error codes on a 429 meaning the account's API credits are exhausted
+     * rather than a transient rate limit. These are never retried — waiting out
+     * the backoff cannot conjure more credits.
+     *
+     * <p>{@code ApiLimitExceeded} is the documented code (see the ErrorCode
+     * enum in https://newsdata.io/openapi.json); {@code ApiKeyLimitExceeded} is
+     * accepted too because the API has been observed to send it and the spec is
+     * not exhaustive.
+     */
+    public static final Set<String> QUOTA_EXHAUSTED_CODES =
+            Set.of("ApiLimitExceeded", "ApiKeyLimitExceeded");
+
     /** Endpoints that require both {@code from_date} and {@code to_date}. */
     public static final Set<String> REQUIRES_DATE_RANGE =
             Set.of("count", "crypto_count", "market_count");
