@@ -6,7 +6,7 @@
 
     <groupId>io.newsdata</groupId>
     <artifactId>newsdataapi</artifactId>
-    <version>0.2.0</version>
+    <version>0.2.1</version>
     <packaging>jar</packaging>
 
     <name>newsdataapi</name>
