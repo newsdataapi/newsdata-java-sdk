@@ -26,6 +26,9 @@ import io.newsdata.api.exception.NewsdataWebSocketException;
 /**
  * NewsData.io real-time WebSocket service.
  *
+ * <p>The real-time service is part of API v2, so registrations take the v2
+ * filter names and responses carry the v2 envelope and article layout.
+ *
  * <p>Registers, lists, and deletes the account's real-time queries and streams
  * the responses for a registered query. The management calls go through the
  * wrapped {@link NewsDataApiClient}:
@@ -36,9 +39,10 @@ import io.newsdata.api.exception.NewsdataWebSocketException;
  *     NewsdataResponse registered = ws.websocketRegister(Params.of().with("q", "bitcoin"));
  *     String id = registered.results().path("registration_id").asText();
  *
+ *     // Streamed articles use the v2 layout.
  *     ws.stream(id, response -> {
- *         for (Article a : response.articles(client.objectMapper())) {
- *             System.out.println(a.title());
+ *         for (ArticleV2 a : response.articlesV2(client.objectMapper())) {
+ *             System.out.println(a.title() + " - " + a.url() + " (" + a.source().name() + ")");
  *         }
  *         return true;   // keep streaming; return false to stop
  *     });
@@ -162,8 +166,8 @@ public final class NewsDataApiWebSocket implements AutoCloseable {
 
     /**
      * Connect and hand each response to {@code handler} as it arrives.
-     * Responses have the familiar {@code status} / {@code totalResults} /
-     * {@code results} shape.
+     * Responses carry {@code status}, {@code total_results} and
+     * {@code results}, and their articles use the v2 layout.
      *
      * <p>Blocks until the handler returns {@code false}, the instance is
      * closed, the calling thread is interrupted, or — with reconnect
@@ -275,9 +279,9 @@ public final class NewsDataApiWebSocket implements AutoCloseable {
             if (node == null || !node.isObject()) return null;
             return new NewsdataResponse(
                     node.path("status").asText(null),
-                    node.path("totalResults").asInt(0),
+                    NewsDataApiClient.totalResultsOf(node),
                     node.get("results"),
-                    node.hasNonNull("nextPage") ? node.get("nextPage").asText() : null,
+                    NewsDataApiClient.nextPageOf(node),
                     null);
         } catch (IOException e) {
             return null;

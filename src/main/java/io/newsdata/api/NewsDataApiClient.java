@@ -143,14 +143,98 @@ public final class NewsDataApiClient {
 
     // ---- real-time query management --------------------------------------
 
+    // ---- v2 endpoints -------------------------------------------------
+    //
+    // v2 renames the filter vocabulary to snake_case (q_in_title,
+    // exclude_country, source_priority, content, remove_duplicate, ...) and
+    // folds domain/domainurl/excludedomain/excludedomainurl into source_url /
+    // exclude_source_url. Responses carry total_results / next_page, which
+    // NewsdataResponse exposes as totalResults() / nextPage() either way.
+
     /**
-     * Register a real-time WebSocket query. POST /1/websocket/register.
+     * Latest news, or historical news when {@code params} carries
+     * {@code from_date} / {@code to_date}. {@code GET /2/news}
      *
-     * <p>Takes the familiar filter names ({@code q}, {@code country},
-     * {@code language}, {@code domain}, …); no date or paging filters apply,
-     * since a registered query matches news as it is published. The new
-     * query's id is at {@code results.registration_id} — pass it to
-     * {@link NewsDataApiWebSocket#stream}.
+     * <p>There is no {@code /2/archive}; this endpoint covers both.
+     *
+     * @param params endpoint filters
+     * @return the decoded response
+     */
+    public NewsdataResponse newsV2(Map<String, Object> params) {
+        return request("news_v2", params);
+    }
+
+    /**
+     * Market / financial news. {@code GET /2/market}
+     *
+     * @param params endpoint filters
+     * @return the decoded response
+     */
+    public NewsdataResponse marketV2(Map<String, Object> params) {
+        return request("market_v2", params);
+    }
+
+    /**
+     * Cryptocurrency news. {@code GET /2/crypto}
+     *
+     * @param params endpoint filters
+     * @return the decoded response
+     */
+    public NewsdataResponse cryptoV2(Map<String, Object> params) {
+        return request("crypto_v2", params);
+    }
+
+    /**
+     * Available news sources. {@code GET /2/sources} Single-page endpoint;
+     * {@code scrollAll} and {@code paginate} are not supported.
+     *
+     * @param params endpoint filters
+     * @return the decoded response
+     */
+    public NewsdataResponse sourcesV2(Map<String, Object> params) {
+        return request("sources_v2", params);
+    }
+
+    /**
+     * Aggregate news counts. {@code GET /2/count/news}
+     *
+     * @param params endpoint filters
+     * @return the decoded response
+     */
+    public NewsdataResponse countNewsV2(Map<String, Object> params) {
+        return request("count_news_v2", params);
+    }
+
+    /**
+     * Aggregate market counts. {@code GET /2/count/market}
+     *
+     * @param params endpoint filters
+     * @return the decoded response
+     */
+    public NewsdataResponse countMarketV2(Map<String, Object> params) {
+        return request("count_market_v2", params);
+    }
+
+    /**
+     * Aggregate crypto counts. {@code GET /2/count/crypto}
+     *
+     * @param params endpoint filters
+     * @return the decoded response
+     */
+    public NewsdataResponse countCryptoV2(Map<String, Object> params) {
+        return request("count_crypto_v2", params);
+    }
+
+    /**
+     * Register a real-time WebSocket query. POST /2/websocket/register.
+     *
+     * <p>The real-time service is v2 only, so this takes the same filter names
+     * as {@link #newsV2} ({@code q}, {@code q_in_title}, {@code country},
+     * {@code exclude_country}, {@code source_url}, {@code content},
+     * {@code exclude_field}, {@code timezone}, …); the date, paging and
+     * sorting filters, {@code id} and {@code url} do not apply to a standing
+     * query. The new query's id is at {@code results.registration_id} — pass
+     * it to {@link NewsDataApiWebSocket#stream}.
      *
      * <p>Registering an identical query twice throws
      * {@link io.newsdata.api.exception.NewsdataApiException} with status 409;
@@ -164,14 +248,19 @@ public final class NewsDataApiClient {
     }
 
     /**
-     * List the account's registered real-time queries. GET /1/websocket/fetch.
-     * One entry per query at {@code results.queries}.
+     * List the account's registered real-time queries. GET /2/websocket/fetch.
+     *
+     * <p>{@code results} is a list with one entry per query, each carrying its
+     * {@code registration_id}, the filters it was registered with
+     * ({@code query}), how many devices are streaming it now
+     * ({@code active_clients}) and when one last connected
+     * ({@code last_used}, UTC).
      */
     public NewsdataResponse websocketFetch() {
         return request(Endpoint.WEBSOCKET_FETCH.key(), Map.of());
     }
 
-    /** Delete a registered real-time query. DELETE /1/websocket/delete. */
+    /** Delete a registered real-time query. DELETE /2/websocket/delete. */
     public NewsdataResponse websocketDelete(String registrationId) {
         if (registrationId == null || registrationId.isEmpty()) {
             throw new NewsdataValidationException(
@@ -346,9 +435,9 @@ public final class NewsDataApiClient {
                     && (hasResults || Constants.RESULTS_OPTIONAL.contains(endpoint))) {
                 return new NewsdataResponse(
                         "success",
-                        parsed.path("totalResults").asInt(0),
+                        totalResultsOf(parsed),
                         parsed.get("results"),
-                        parsed.hasNonNull("nextPage") ? parsed.get("nextPage").asText() : null,
+                        nextPageOf(parsed),
                         includeHeaders ? resp.headers() : null);
             }
 
@@ -356,9 +445,15 @@ public final class NewsDataApiClient {
 
             if (status == 429) {
                 int retryAfter = parseRetryAfter(resp.headers().firstValue("retry-after").orElse(null));
+                resp.headers().firstValue("x-apikey-limit-remaining").ifPresent(
+                        remaining -> log("warn", "X-APIKEY-Limit-Remaining: " + remaining));
                 // A 429 covers a burst limit, a rate limit, and exhausted API
                 // credits. Only the first two are worth retrying.
-                if (quotaExhausted(parsed) || attempt >= maxRetries) {
+                Constants.QuotaExceptionFactory quotaError = quotaExhaustedError(parsed);
+                if (quotaError != null) {
+                    throw quotaError.create(message, 429, body, retryAfter);
+                }
+                if (attempt >= maxRetries) {
                     throw new NewsdataRateLimitException(message, 429, body, retryAfter);
                 }
                 Duration wait = retryAfter > 0 ? Duration.ofSeconds(retryAfter) : backoff(attempt);
@@ -409,16 +504,42 @@ public final class NewsDataApiClient {
     }
 
     /**
-     * Whether a 429 body carries an error code meaning the account is out of
-     * API credits, as opposed to a transient rate limit.
+     * The exception to throw for a 429 whose body says the API credits are
+     * exhausted, or {@code null} when the 429 is a transient rate limit worth
+     * retrying.
      */
-    private static boolean quotaExhausted(JsonNode body) {
-        if (body == null) return false;
+    private static Constants.QuotaExceptionFactory quotaExhaustedError(JsonNode body) {
+        if (body == null) return null;
         JsonNode results = body.get("results");
-        if (results == null || !results.isObject()) return false;
+        if (results == null || !results.isObject()) return null;
         JsonNode code = results.get("code");
-        return code != null && code.isTextual()
-                && Constants.QUOTA_EXHAUSTED_CODES.contains(code.asText());
+        if (code == null || !code.isTextual()
+                || !Constants.QUOTA_EXHAUSTED_CODES.contains(code.asText())) {
+            return null;
+        }
+        return Constants.QUOTA_EXHAUSTED_ERRORS.get(code.asText());
+    }
+
+    /**
+     * The result total from either envelope spelling: {@code total_results}
+     * (v2) or {@code totalResults} (v1). Package-private so the WebSocket
+     * layer decodes its frames the same way.
+     */
+    static int totalResultsOf(JsonNode parsed) {
+        return parsed.hasNonNull("total_results")
+                ? parsed.get("total_results").asInt(0)
+                : parsed.path("totalResults").asInt(0);
+    }
+
+    /**
+     * The paging cursor from either envelope spelling: {@code next_page} (v2)
+     * or {@code nextPage} (v1).
+     */
+    static String nextPageOf(JsonNode parsed) {
+        if (parsed.hasNonNull("next_page")) {
+            return parsed.get("next_page").asText();
+        }
+        return parsed.hasNonNull("nextPage") ? parsed.get("nextPage").asText() : null;
     }
 
     private String errorMessage(JsonNode body, int status) {

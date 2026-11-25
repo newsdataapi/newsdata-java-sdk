@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import io.newsdata.api.exception.NewsdataRateLimitException;
 import io.newsdata.api.exception.NewsdataValidationException;
 import io.newsdata.api.exception.NewsdataWebSocketAuthException;
 import io.newsdata.api.exception.NewsdataWebSocketException;
@@ -36,7 +38,8 @@ class NewsDataApiWebSocketTest {
     void startHttp() throws IOException {
         httpServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         httpServer.start();
-        baseUrl = "http://127.0.0.1:" + httpServer.getAddress().getPort() + "/api/1/";
+        // baseUrl is the API root; the endpoint paths carry the version.
+        baseUrl = "http://127.0.0.1:" + httpServer.getAddress().getPort() + "/api/";
     }
 
     @AfterEach
@@ -46,6 +49,11 @@ class NewsDataApiWebSocketTest {
 
     private void handle(String path, HttpHandler handler) {
         httpServer.createContext("/api/1/" + path, handler);
+    }
+
+    /** The real-time management endpoints live under API version 2. */
+    private void handleV2(String path, HttpHandler handler) {
+        httpServer.createContext("/api/2/" + path, handler);
     }
 
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
@@ -61,8 +69,8 @@ class NewsDataApiWebSocketTest {
     }
 
     private static String articleFrame(String id, String title) {
-        return "{\"status\":\"success\",\"totalResults\":1,\"results\":"
-                + "[{\"article_id\":\"" + id + "\",\"title\":\"" + title + "\"}]}";
+        return "{\"status\":\"success\",\"total_results\":1,\"results\":"
+                + "[{\"id\":\"" + id + "\",\"title\":\"" + title + "\"}]}";
     }
 
     @Test
@@ -243,7 +251,7 @@ class NewsDataApiWebSocketTest {
     void websocketRegisterPostsWithNewsType() {
         AtomicReference<String> method = new AtomicReference<>();
         AtomicReference<String> query = new AtomicReference<>();
-        handle("websocket/register", exchange -> {
+        handleV2("websocket/register", exchange -> {
             method.set(exchange.getRequestMethod());
             query.set(exchange.getRequestURI().getQuery());
             respond(exchange, 200,
@@ -253,14 +261,14 @@ class NewsDataApiWebSocketTest {
         var response = client().websocketRegister(Params.of().with("q", "bitcoin"));
 
         assertEquals("POST", method.get());
-        assertTrue(query.get().contains("news_type=latest"), query.get());
+        assertTrue(query.get().contains("news_type=news"), query.get());
         assertTrue(query.get().contains("q=bitcoin"), query.get());
         assertEquals("reg-9", response.results().path("registration_id").asText());
     }
 
     @Test
     void websocketRegisterDoesNotMutateCallerParams() {
-        handle("websocket/register", exchange ->
+        handleV2("websocket/register", exchange ->
                 respond(exchange, 200, "{\"status\":\"success\",\"results\":{}}"));
 
         var params = Params.of().with("q", "bitcoin");
@@ -273,9 +281,10 @@ class NewsDataApiWebSocketTest {
     @Test
     void websocketFetchUsesGet() {
         AtomicReference<String> method = new AtomicReference<>();
-        handle("websocket/fetch", exchange -> {
+        handleV2("websocket/fetch", exchange -> {
             method.set(exchange.getRequestMethod());
-            respond(exchange, 200, "{\"status\":\"success\",\"results\":{\"queries\":[]}}");
+            respond(exchange, 200,
+                    "{\"status\":\"success\",\"total_results\":0,\"results\":[]}");
         });
 
         client().websocketFetch();
@@ -283,10 +292,29 @@ class NewsDataApiWebSocketTest {
     }
 
     @Test
+    void websocketFetchReturnsOneFlatEntryPerQuery() {
+        handleV2("websocket/fetch", exchange -> respond(exchange, 200,
+                "{\"status\":\"success\",\"total_results\":1,\"results\":[{"
+                        + "\"registration_id\":\"reg-9\",\"active_clients\":2,"
+                        + "\"last_used\":\"2026-11-20T10:15:00Z\","
+                        + "\"news_type\":\"news\",\"query\":{\"q\":\"pizza\"}}]}"));
+
+        var response = client().websocketFetch();
+
+        assertEquals(1, response.totalResults());
+        assertTrue(response.results().isArray(), "results should be a flat array");
+        var entry = response.results().get(0);
+        assertEquals("reg-9", entry.path("registration_id").asText());
+        assertEquals(2, entry.path("active_clients").asInt());
+        assertEquals("2026-11-20T10:15:00Z", entry.path("last_used").asText());
+        assertEquals("pizza", entry.path("query").path("q").asText());
+    }
+
+    @Test
     void websocketDeleteUsesDelete() {
         AtomicReference<String> method = new AtomicReference<>();
         AtomicReference<String> query = new AtomicReference<>();
-        handle("websocket/delete", exchange -> {
+        handleV2("websocket/delete", exchange -> {
             method.set(exchange.getRequestMethod());
             query.set(exchange.getRequestURI().getQuery());
             respond(exchange, 200, "{\"status\":\"success\",\"results\":{\"deleted\":true}}");
@@ -305,10 +333,89 @@ class NewsDataApiWebSocketTest {
 
     @Test
     void resultlessSuccessStillSucceedsOnWebsocketEndpoints() {
-        handle("websocket/delete", exchange ->
+        handleV2("websocket/delete", exchange ->
                 respond(exchange, 200, "{\"status\":\"success\"}"));
 
         var response = client().websocketDelete("reg-9");
         assertEquals("success", response.status());
+    }
+
+    // ---- API version 2 ----------------------------------------------------
+    // The real-time service moved to API version 2: the management endpoints
+    // sit under /2/, news_type names the v2 news feed, and a registration
+    // takes the v2 filter vocabulary only.
+
+    @Test
+    void websocketEndpointsAreUnderApiVersion2() {
+        assertEquals("2/websocket/register",
+                Constants.ENDPOINT_PATHS.get("websocket_register"));
+        assertEquals("2/websocket/fetch", Constants.ENDPOINT_PATHS.get("websocket_fetch"));
+        assertEquals("2/websocket/delete", Constants.ENDPOINT_PATHS.get("websocket_delete"));
+    }
+
+    @Test
+    void newsTypeNamesTheV2NewsFeed() {
+        assertEquals("news", Constants.WS_NEWS_TYPE);
+    }
+
+    @Test
+    void registerTakesTheV2FilterNames() {
+        var filters = Constants.FILTERS.get("websocket_register");
+        for (String name : List.of(
+                "q_in_title", "q_in_meta", "exclude_country", "exclude_category",
+                "exclude_language", "source_url", "exclude_source_url",
+                "source_priority", "content", "remove_duplicate", "exclude_field")) {
+            assertTrue(filters.contains(name), name + " should be a register filter");
+        }
+        for (String name : List.of(
+                "qintitle", "qinmeta", "excludecountry", "excludecategory",
+                "excludelanguage", "domain", "domainurl", "excludedomain",
+                "excludedomainurl", "prioritydomain", "full_content",
+                "removeduplicate", "excludefield")) {
+            assertTrue(!filters.contains(name), name + " should no longer be a register filter");
+        }
+        // Still no date or paging filters on a standing query.
+        for (String name : List.of("from_date", "to_date", "page", "size", "sort")) {
+            assertTrue(!filters.contains(name), name + " does not apply to a standing query");
+        }
+    }
+
+    @Test
+    void registerRejectsAV1FilterName() {
+        assertThrows(NewsdataValidationException.class,
+                () -> client().websocketRegister(Params.of().with("qInTitle", "pizza")));
+    }
+
+    @Test
+    void registerKeepsTheV2SourceUrlMutexGroup() {
+        assertThrows(NewsdataValidationException.class,
+                () -> client().websocketRegister(Params.of()
+                        .with("source_url", "a.com")
+                        .with("exclude_source_url", "b.com")));
+    }
+
+    // RegistrationLimitExceeded means every registration slot the plan allows
+    // is in use. It is never retried, but keeps the base exception: it is about
+    // slots, not credits, so there is no dedicated subclass.
+    @Test
+    void registrationLimitExceededKeepsTheBaseException() {
+        AtomicInteger calls = new AtomicInteger();
+        handleV2("websocket/register", exchange -> {
+            calls.incrementAndGet();
+            respond(exchange, 429, "{\"status\":\"error\",\"results\":{"
+                    + "\"message\":\"limit\",\"code\":\"RegistrationLimitExceeded\"}}");
+        });
+
+        NewsDataApiClient client = NewsDataApiClient.builder()
+                .apiKey("key").baseUrl(baseUrl)
+                .maxRetries(5).retryBackoff(Duration.ofMillis(1))
+                .retryBackoffMax(Duration.ofMillis(1))
+                .build();
+
+        var err = assertThrows(NewsdataRateLimitException.class,
+                () -> client.websocketRegister(Params.of().with("q", "x")));
+        assertEquals(NewsdataRateLimitException.class, err.getClass(),
+                "registration slots are not credits, so no subclass applies");
+        assertEquals(1, calls.get(), "a full registration set must not retry");
     }
 }

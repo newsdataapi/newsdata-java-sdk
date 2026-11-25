@@ -7,7 +7,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * One news article from the Newsdata.io API.
+ * One news article from API v1 of the Newsdata.io API.
+ *
+ * <p>v2 renamed and regrouped these fields; see {@link ArticleV2}.
  *
  * <p>This is a Java 17 record. Field accessors are component names without
  * the {@code get} prefix — e.g. {@code article.title()}, not

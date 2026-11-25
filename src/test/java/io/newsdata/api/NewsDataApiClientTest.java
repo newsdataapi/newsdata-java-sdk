@@ -44,7 +44,8 @@ class NewsDataApiClientTest {
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.start();
-        baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/api/1/";
+        // baseUrl is the API root; the endpoint paths carry the version.
+        baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/api/";
     }
 
     @AfterEach
@@ -52,8 +53,14 @@ class NewsDataApiClientTest {
         if (server != null) server.stop(0);
     }
 
+    /** Mount a handler for a v1 endpoint path; the version prefix is added. */
     private void handle(String path, HttpHandler handler) {
         server.createContext("/api/1/" + path, handler);
+    }
+
+    /** Mount a handler at an exact path under the API root, version included. */
+    private void handlePath(String path, HttpHandler handler) {
+        server.createContext("/api/" + path, handler);
     }
 
     private static String successBody(String resultsJson) {

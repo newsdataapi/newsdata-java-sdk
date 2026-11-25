@@ -28,7 +28,7 @@ dependency is Jackson for JSON. Thread-safe.
 <dependency>
     <groupId>io.newsdata</groupId>
     <artifactId>newsdataapi</artifactId>
-    <version>0.2.1</version>
+    <version>0.3.0</version>
 </dependency>
 ```
 
@@ -64,6 +64,97 @@ for (Article article : resp.articles(client.objectMapper())) {
 
 ## Endpoints
 
+The API has two versions. v2 is the current one; the v1 methods keep working
+unchanged.
+
+### v2
+
+| Method | Endpoint | Notes |
+|--------|----------|-------|
+| `client.newsV2(params)` | `/2/news` | Latest news, or historical with `from_date` / `to_date` |
+| `client.marketV2(params)` | `/2/market` | Market / financial news |
+| `client.cryptoV2(params)` | `/2/crypto` | Cryptocurrency news |
+| `client.sourcesV2(params)` | `/2/sources` | Available sources (single page) |
+| `client.countNewsV2(params)` | `/2/count/news` | Aggregate news counts |
+| `client.countMarketV2(params)` | `/2/count/market` | Aggregate market counts |
+| `client.countCryptoV2(params)` | `/2/count/crypto` | Aggregate crypto counts |
+| `client.websocketRegister(params)` | `/2/websocket/register` | Register a real-time query |
+| `client.websocketFetch()` | `/2/websocket/fetch` | List registered queries |
+| `client.websocketDelete(id)` | `/2/websocket/delete` | Delete a registered query |
+
+v2 renames the filter vocabulary to snake_case and folds the four domain
+filters into two:
+
+| v1 | v2 |
+|----|----|
+| `qInTitle`, `qInMeta` | `q_in_title`, `q_in_meta` |
+| `excludecountry`, `excludecategory`, `excludelanguage` | `exclude_country`, `exclude_category`, `exclude_language` |
+| `domain`, `domainurl`, `excludedomain`, `excludedomainurl` | `source_url`, `exclude_source_url` |
+| `prioritydomain` | `source_priority` |
+| `full_content` | `content` |
+| `removeduplicate`, `excludefield` | `remove_duplicate`, `exclude_field` |
+
+`coin` and `market_id` keep their names.
+
+```java
+NewsdataResponse resp = client.newsV2(Params.of()
+        .with("q_in_title", "tesla")
+        .with("source_url", "bbc.com")
+        .with("content", true));
+```
+
+The v2 envelope spells its total and cursor `total_results` / `next_page`
+where v1 spells them `totalResults` / `nextPage`. `NewsdataResponse` reads
+either, so `totalResults()`, `nextPage()`, `scrollAll` and `paginate` behave
+the same whichever version answered. Pass `Endpoint.NEWS_V2` and friends to
+the pagination helpers.
+
+There is no `/2/archive` — `newsV2` covers historical news through
+`from_date` / `to_date`.
+
+#### v2 articles
+
+v2 renamed and regrouped the article fields, so the v2 endpoints and the
+real-time stream decode with `articlesV2(…)` and `ArticleV2`, while the v1
+endpoints keep `articles(…)` and `Article`:
+
+```java
+NewsdataResponse resp = client.newsV2(Params.of().with("q", "bitcoin"));
+
+for (ArticleV2 a : resp.articlesV2(client.objectMapper())) {
+    System.out.println(a.title() + " " + a.url() + " " + a.publishedAt());
+    System.out.println(a.source().name() + " " + a.source().priority());
+    System.out.println(a.media().imageUrl());
+    System.out.println(a.ai().summary() + " " + a.ai().sentiment().label() + " " + a.ai().tag());
+}
+```
+
+| v1 (`Article`) | v2 (`ArticleV2`) |
+|----------------|------------------|
+| `articleId()` | `id()` |
+| `link()` | `url()` |
+| `pubDate()` | `publishedAt()` |
+| `description()` | `metaDescription()` |
+| `keywords()` | `keyword()` |
+| `symbol()` | `ticker()` |
+| `sourceName()`, `sourceUrl()`, `sourcePriority()`, `sourceIcon()` | `source().name()`, `source().url()`, `source().priority()`, `source().iconUrl()` |
+| `imageUrl()`, `videoUrl()` | `media().imageUrl()`, `media().videoUrl()` |
+| `sentiment()`, `sentimentStats()` | `ai().sentiment().label()`, `ai().sentiment().score()` |
+| `aiTag()`, `aiRegion()`, `aiOrg()` | `ai().tag()`, `ai().region()`, `ai().organization()` |
+| — | `ai().summary()`, `fetchedAt()`, `duplicate()`, `coin()`, `marketId()` |
+
+A group the API did not send (`source`, `media`, `ai`) is `null`; a list field
+it did not send is an empty list. `ai().region()` entries are comma-separated
+paths from the narrowest place to the widest (`"mumbai,maharashtra,india"`), so
+do not split them on commas.
+
+A field your plan does not include arrives as the API's notice string in place
+of the data (`"ONLY AVAILABLE IN PAID PLANS"`). Decoding tolerates it — a list
+field holds the single notice, and a withheld sentiment carries it in
+`label()` — and `ArticleV2.isPlanNotice(value)` tells it apart from real data.
+
+### v1
+
 | Method | Endpoint | Notes |
 |--------|----------|-------|
 | `client.latest(params)` | `/1/latest` | Real-time news |
@@ -74,9 +165,8 @@ for (Article article : resp.articles(client.objectMapper())) {
 | `client.count(params)` | `/1/count` | Aggregate counts (requires `from_date`, `to_date`) |
 | `client.cryptoCount(params)` | `/1/crypto/count` | Aggregate crypto counts |
 | `client.marketCount(params)` | `/1/market/count` | Aggregate market counts |
-| `client.websocketRegister(params)` | `/1/websocket/register` | Register a real-time query |
-| `client.websocketFetch()` | `/1/websocket/fetch` | List registered queries |
-| `client.websocketDelete(id)` | `/1/websocket/delete` | Delete a registered query |
+
+The real-time service is v2 only — there are no v1 WebSocket methods.
 
 `params` is a `Map<String, Object>`. Use the bundled [`Params`](src/main/java/io/newsdata/api/Params.java) helper for fluent construction — `null` values are dropped automatically so you can chain optional fields without `if`-guards. Values may be `String`, `Number`, `Boolean`, or `Collection<String>` (sent comma-joined). Parameter names are case-insensitive — `qInTitle` and `qintitle` are equivalent.
 
@@ -120,7 +210,8 @@ Booleans for `full_content`, `image`, `video`, and `removeduplicate` are coerced
 
 ## Real-time news (WebSocket)
 
-Register a query first — the returned `registration_id` identifies it from then on:
+The real-time service is part of API v2. Register a query first — the returned
+`registration_id` identifies it from then on:
 
 ```java
 NewsdataResponse registered = client.websocketRegister(
@@ -128,20 +219,32 @@ NewsdataResponse registered = client.websocketRegister(
 String registrationId = registered.results().path("registration_id").asText();
 ```
 
-`websocketRegister` takes the familiar filter names (`q`, `country`,
-`language`, `domain`, …) — no date or paging filters, since a registered query
-matches news as it is published. Registering an identical query twice throws
-`NewsdataApiException` with status 409; the existing id is in its response body.
-`websocketFetch()` lists every registered query and `websocketDelete(id)`
-removes one.
+`websocketRegister` takes the same filter names as `newsV2` (`q`,
+`q_in_title`, `country`, `exclude_country`, `source_url`, `content`,
+`exclude_field`, `timezone`, …) — the date, paging and sorting filters, `id`
+and `url` don't apply to a standing query. Registering an identical query twice
+throws `NewsdataApiException` with status 409; the existing id is in its
+response body.
 
-Then stream. The handler returns `true` to keep streaming and `false` to stop:
+`websocketFetch()` lists every registered query: `results()` is an array with
+one entry per query, carrying its `registration_id`, the filters it was
+registered with (`query`), how many devices are streaming it now
+(`active_clients`) and when one last connected (`last_used`, UTC).
+`websocketDelete(id)` removes one. Once every registration the plan allows is
+in use, registering another throws a 429 `NewsdataRateLimitException` carrying
+the code `RegistrationLimitExceeded`; it is not retried, since only deleting a
+registration frees a slot.
+
+Then stream. Each response carries `status`, `total_results` and `results` —
+read through `status()`, `totalResults()` and `results()` — and its articles
+use the v2 layout, so decode them with `articlesV2(…)`. The handler returns
+`true` to keep streaming and `false` to stop:
 
 ```java
 try (NewsDataApiWebSocket ws = new NewsDataApiWebSocket(client)) {
     ws.stream(registrationId, response -> {
-        for (Article a : response.articles(client.objectMapper())) {
-            System.out.println(a.title() + " - " + a.link());
+        for (ArticleV2 a : response.articlesV2(client.objectMapper())) {
+            System.out.println(a.title() + " - " + a.url() + " (" + a.source().name() + ")");
         }
         return true;
     });
@@ -225,6 +328,10 @@ NewsdataException (extends RuntimeException)
 ├── NewsdataApiException                    (.statusCode(), .responseBody())
 │   ├── NewsdataAuthException               (401 / 403)
 │   ├── NewsdataRateLimitException          (429; .retryAfter())
+│   │   ├── NewsdataApiLimitExceededException     (account credits gone)
+│   │   └── NewsdataApiKeyLimitExceededException  (this key's cap gone)
+│   │   (RegistrationLimitExceeded stays on NewsdataRateLimitException —
+│   │    real-time registration slots, not credits)
 │   └── NewsdataServerException             (5xx)
 ├── NewsdataNetworkException                (.getCause())
 └── NewsdataWebSocketException              (real-time stream)
@@ -241,14 +348,18 @@ NewsDataApiClient client = NewsDataApiClient.builder()
         .retryBackoff(Duration.ofSeconds(2))           // base, exponential
         .retryBackoffMax(Duration.ofSeconds(60))       // cap on a single sleep
         .paginationDelay(Duration.ofSeconds(1))
-        .baseUrl("https://staging.example/api/1/")     // staging / proxy
+        .baseUrl("https://staging.example/api")        // root, no version
         .includeHeaders(true)                          // attach response headers
         .httpClient(myCustomHttpClient)                // proxies, mTLS, etc.
         .logger((level, msg) -> System.out.println(level + ": " + msg))
         .build();
 ```
 
+`baseUrl` is the API root **without** a version segment; the default is `https://newsdata.io/api/` and the client adds `1/…` or `2/…` itself. Before 0.3.0 it included the version (`https://newsdata.io/api/1/`), so drop the trailing `1/` if you override it.
+
 Retries cover network errors, HTTP 429, and 5xx. 429 honours the `Retry-After` header (integer seconds or HTTP-date); otherwise backoff is exponential. Auth (401/403) and other 4xx errors are never retried. The API key is redacted from URLs passed to the logger.
+
+A 429 that waiting cannot fix is never retried: `NewsdataApiLimitExceededException` means the account's whole credit pool is exhausted, `NewsdataApiKeyLimitExceededException` means this one key hit its own cap while the account may still have credits, and both extend `NewsdataRateLimitException`, so an existing `catch` on that type keeps working. `RegistrationLimitExceeded` is also never retried, but keeps the plain `NewsdataRateLimitException` — it is about real-time registration slots, not credits, and is fixed by deleting a registration.
 
 ## Concurrency
 

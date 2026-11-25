@@ -24,11 +24,27 @@ public enum Endpoint {
     CRYPTO_COUNT("crypto_count"),
     /** {@code /1/market/count} — aggregate market counts. */
     MARKET_COUNT("market_count"),
-    /** {@code /1/websocket/register} — register a real-time query. */
+
+    /** {@code /2/news} — latest news, or historical with dates. */
+    NEWS_V2("news_v2"),
+    /** {@code /2/market} — market / financial news. */
+    MARKET_V2("market_v2"),
+    /** {@code /2/crypto} — cryptocurrency news. */
+    CRYPTO_V2("crypto_v2"),
+    /** {@code /2/sources} — available news sources (single page). */
+    SOURCES_V2("sources_v2"),
+    /** {@code /2/count/news} — aggregate news counts. */
+    COUNT_NEWS_V2("count_news_v2"),
+    /** {@code /2/count/market} — aggregate market counts. */
+    COUNT_MARKET_V2("count_market_v2"),
+    /** {@code /2/count/crypto} — aggregate crypto counts. */
+    COUNT_CRYPTO_V2("count_crypto_v2"),
+
+    /** {@code /2/websocket/register} — register a real-time query. */
     WEBSOCKET_REGISTER("websocket_register"),
-    /** {@code /1/websocket/fetch} — list registered real-time queries. */
+    /** {@code /2/websocket/fetch} — list registered real-time queries. */
     WEBSOCKET_FETCH("websocket_fetch"),
-    /** {@code /1/websocket/delete} — delete a registered real-time query. */
+    /** {@code /2/websocket/delete} — delete a registered real-time query. */
     WEBSOCKET_DELETE("websocket_delete");
 
     private final String key;
